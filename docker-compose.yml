@@ -1,74 +1,54 @@
 version: '3.8'
 
 services:
-  # Servidor PHP/Apache
-  php_app:
-    build: ./php-server
-    container_name: php_app
+  # 1) Clúster CockroachDB de pruebas
+  cockroach:
+    image: cockroachdb/cockroach:v23.1.11
+    container_name: cockroach-node
+    command: start-single-node --insecure
     ports:
-      - "81:80"
+      - "26257:26257"   # SQL
+      - "8080:8080"     # Admin UI
     volumes:
-      - ./php-server/app:/var/www/html
+      - cockroach-data:/cockroach/cockroach-data
+      - ./db-init:/db-init   # Montamos aquí el SQL
+    healthcheck:
+      test: ["CMD", "cockroach", "sql", "--insecure", "--database=defaultdb", "-e", "SELECT 1"]
+      interval: 5s
+      retries: 5
+
+  # 2) Init que carga el esquema en cuanto Cockroach esté listo
+  cockroach-init:
+    image: cockroachdb/cockroach:v23.1.11
+    container_name: cockroach-init
     depends_on:
-      - mysql1
-      - mysql2
-      - mysql3
-    networks:
-      - db_network
-
-  # Nodos MySQL (3 instancias)
-  mysql1:
-    image: mysql:8.0
-    container_name: mysql_node1
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: tickets
+      cockroach:
+        condition: service_healthy
+    entrypoint: [ "sh", "-ec",
+      "echo '==> Importando esquema…'; \
+       cockroach sql \
+         --insecure \
+         --host=cockroach \
+         --port=26257 \
+         --database=tickets \
+         --file=/db-init/init_cockroach.sql; \
+       echo '==> Esquema cargado.'"
+    ]
     volumes:
-      - ./db-init:/docker-entrypoint-initdb.d  # Ejecuta scripts al iniciar
-    ports:
-      - "3306:3306"
-    networks:
-      - db_network
+      - ./db-init:/db-init
 
-  mysql2:
-    image: mysql:8.0
-    container_name: mysql_node2
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: tickets
-    volumes:
-      - ./db-init:/docker-entrypoint-initdb.d
-    ports:
-      - "3307:3306"
-    networks:
-      - db_network
-
-  mysql3:
-    image: mysql:8.0
-    container_name: mysql_node3
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: tickets
-    volumes:
-      - ./db-init:/docker-entrypoint-initdb.d
-    ports:
-      - "3308:3306"
-    networks:
-      - db_network
-
-  # Opcional: Adminer para gestión de BD
-  adminer:
-    image: adminer
-    container_name: adminer
-    ports:
-      - "8080:8080"
+  # 3) Tu aplicación PHP/Apache
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: php-web
     depends_on:
-      - mysql1
-      - mysql2
-      - mysql3
-    networks:
-      - db_network
+      - cockroach-init
+    ports:
+      - "8081:80"
+    volumes:
+      - .:/var/www/html
 
-networks:
-  db_network:
-    driver: bridge
+volumes:
+  cockroach-data:

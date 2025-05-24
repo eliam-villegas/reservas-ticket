@@ -1,54 +1,45 @@
 <?php
+session_start();
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
 require '../config/config.php';
 
+$error = '';
+$usuario = '';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $usuario = $_POST['usuario'];
-    $contrasena = password_hash($_POST['contrasena'], PASSWORD_BCRYPT);
-    $exitoParcial = false;
-    $errores = [];
+    $usuario = trim($_POST['usuario'] ?? '');
+    $contrasena = $_POST['contrasena'] ?? '';
 
-    // Generar ID manualmente para consistencia entre nodos (evitar autoincrement)
-    $userId = (int) time().rand(1000, 9999); // ID único basado en timestamp + random
+    if ($usuario === '' || $contrasena === '') {
+        $error = "⚠️ Debes completar todos los campos.";
+    } else {
+        // Hashear contraseña
+        $hash = password_hash($contrasena, PASSWORD_DEFAULT);
+        // Generar un ID único para el usuario
+        $userId = uniqid('', true);
 
-    // Insertar en TODOS los nodos disponibles
-    foreach ($nodes as $index => $node) {
-        $nodePdo = getNodeConnection($index);
-        if ($nodePdo) {
-            try {
-                $nodePdo->beginTransaction();
+        try {
+            $stmt = $conexion->prepare(
+                "INSERT INTO usuarios (usuario, contrasena, estado)
+         VALUES (:usuario, :contrasena, true)"
+            );
+            $stmt->execute([
+                ':usuario'    => $usuario,
+                ':contrasena' => $hash
+            ]);
 
-                // Insertar usuario
-                $stmt = $nodePdo->prepare("
-                    INSERT INTO usuarios (usuario_cod, usuario, estado, contrasena)
-                    VALUES (?, ?, 1, ?)
-                ");
-                $stmt->execute([$userId, $usuario, $contrasena]);
-
-                $nodePdo->commit();
-                $exitoParcial = true;
-            } catch (PDOException $e) {
-                $nodePdo->rollBack();
-                $errores[] = "Nodo {$node['host']}: " . $e->getMessage();
+            header('Location: login.php?registro=exito');
+            exit;
+        } catch (PDOException $e) {
+            if ($e->getCode() === '23505') {
+                $error = "❌ El usuario ya existe.";
+            } else {
+                $error = "❌ Error al registrar: " . $e->getMessage();
             }
         }
     }
-
-    if ($exitoParcial) {
-        $mensaje = "Usuario registrado exitosamente en " . (count($nodes) - count($errores)) . "/" . count($nodes) . " nodos.";
-        if (!empty($errores)) {
-            $mensaje .= "<br>Errores: " . implode(", ", $errores);
-        }
-        echo "<script>
-            alert('$mensaje');
-            window.location.href = 'login.php';
-        </script>";
-    } else {
-        echo "<script>
-            alert('❌ Error: No se pudo registrar en ningún nodo.');
-            window.location.href = 'register.php';
-        </script>";
-    }
-    exit;
 }
 ?>
 
@@ -109,6 +100,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body>
   <div class="form-container">
     <h2>Registrarse</h2>
+      <?php if (!empty($error)): ?>
+          <p style="color:red;"><?= htmlspecialchars($error) ?></p>
+      <?php endif; ?>
     <form method="POST">
       <input type="text" name="usuario" placeholder="Usuario" required>
       <input type="password" name="contrasena" placeholder="Contraseña" required>

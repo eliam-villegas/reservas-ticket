@@ -1,51 +1,26 @@
 <?php
-require '../config/config.php';
+require __DIR__ . '/../config/config.php';
+header('Content-Type: application/json; charset=utf-8');
 
-if (isset($_GET['fecha'])) {
-    $fecha = $_GET['fecha'];
-    $reserva_id_actual = $_GET['editar'] ?? null;
+$fecha = $_GET['fecha'] ?? '';
+$sql = "
+  SELECT 
+    a.asiento_cod::STRING AS asiento_cod,
+    s.sector || ' - ' || a.asiento AS asiento
+  FROM asientos a
+  JOIN sectores s ON a.sector_cod = s.sector_cod
+  LEFT JOIN reservas r
+    ON r.asiento_cod = a.asiento_cod AND r.fecha = :fecha
+  WHERE a.ocupado = false
+    AND r.reserva_id IS NULL
+  ORDER BY s.sector, a.asiento
+";
+$stmt = $conexion->prepare($sql);
+$stmt->execute([':fecha' => $fecha]);
+$libres = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $conteo_asientos = [];
-    $nodos_activos = 0;
-
-    foreach ($nodes as $index => $node) {
-        $nodePdo = getNodeConnection($index);
-        if ($nodePdo) {
-            $nodos_activos++;
-
-            $stmt = $nodePdo->prepare("
-                SELECT a.asiento_cod, a.asiento 
-                FROM asientos a 
-                WHERE a.asiento_cod NOT IN (
-                    SELECT asiento_cod FROM reservas WHERE fecha = ? AND reserva_id != ?
-                )
-            ");
-            $stmt->execute([$fecha, $reserva_id_actual]);
-            $asientos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            foreach ($asientos as $asiento) {
-                $key = $asiento['asiento_cod'] . '|' . $asiento['asiento'];
-                if (!isset($conteo_asientos[$key])) {
-                    $conteo_asientos[$key] = 0;
-                }
-                $conteo_asientos[$key]++;
-            }
-        }
-    }
-
-    // Asientos válidos si están presentes en la mayoría de los nodos disponibles
-    $mayoria = ceil($nodos_activos / 2);
-    $asientosFinales = [];
-
-    foreach ($conteo_asientos as $key => $count) {
-        if ($count >= $mayoria) {
-            list($cod, $asiento) = explode('|', $key);
-            $asientosFinales[] = [
-                'asiento_cod' => (int)$cod,
-                'asiento' => $asiento
-            ];
-        }
-    }
-
-    echo json_encode($asientosFinales);
+// Asegura que asiento_cod sea string
+foreach ($libres as &$row) {
+    $row['asiento_cod'] = (string)$row['asiento_cod'];
 }
+echo json_encode($libres, JSON_UNESCAPED_UNICODE);
